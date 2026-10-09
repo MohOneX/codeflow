@@ -1385,6 +1385,16 @@ const Parser={
         var l='/'+p.toLowerCase().replace(/^\/+/,'');
         // Test files
         if(l.includes('/test')||l.match(/test_\w+\.py$/)||l.match(/\w+_test\.py$/)||l.includes('conftest'))return'test';
+        // Monorepo / stack roots (apps/* + packages/*) — aligned with architecture roles.
+        if(/\/apps\/[^/]+\/src\/app\//.test(l)||/\/apps\/[^/]+\/src\/pages\//.test(l))return'ui';
+        if(/\/apps\/[^/]+\/src\/components?\//.test(l))return'components';
+        if(/\/apps\/(api|server|backend|worker)(-|\/)/.test(l)||/\/apps\/(api|server|backend|worker)\//.test(l))return'services';
+        if(/\/packages\//.test(l)){
+            if(l.includes('/service')||l.includes('/api/')||l.includes('/controller'))return'services';
+            if(l.includes('/data')||l.includes('/model')||l.includes('/store')||l.includes('/schema'))return'data';
+            if(l.includes('/config')||l.includes('/settings'))return'config';
+            return'utils';
+        }
         // UI/View layer
         if(l.includes('/ui/')||l.includes('/views/')||l.includes('/pages/')||l.includes('/templates/')||l.includes('/static/'))return'ui';
         if(l.includes('/component'))return'components';
@@ -3830,17 +3840,90 @@ function listArchitectureLayerRulePresets(){
 }
 var ARCHITECTURE_GROUP_ORDER_CODEFLOW=['Browser App','GitHub Action','Analysis Core','Repository Collection','Rendering / Reports','Testing','Fixtures / Examples','Application','Storage'];
 var ARCHITECTURE_GROUP_ORDER_WEBAPP=['App Entry / Shell','Frontend Routes / Views','Frontend Components','Backend / API Layer','Services / Business Logic','Data / Storage','Shared / Utilities','Configuration','Content / Data','External Integrations','Build Output','Testing','Fixtures / Examples'];
+var ARCHITECTURE_GROUP_ORDER_MONOREPO=['Apps','API / Services','Shared Packages','Data / Storage','Configuration','Testing','Fixtures / Examples','Build Output'];
 var ARCHITECTURE_GROUP_ORDER_GENERIC=['Application','Shared Services / Utils','Configuration','Content / Data','Build Output','Testing','Fixtures / Examples','Storage'];
+
+// Map diagram roles → canonical layer keys shared with detectLayer / layerOrder.
+var ARCHITECTURE_ROLE_TO_LAYER={
+    'app-shell':'ui',
+    'frontend-route':'ui',
+    'frontend-component':'components',
+    'browser-shell':'ui',
+    'backend-routes':'services',
+    'backend-middleware':'services',
+    'backend-services':'services',
+    'backend-module':'services',
+    'platform-analyzer':'services',
+    'api-client':'services',
+    'action-entry':'services',
+    'shared-module':'utils',
+    'analyzer-loader':'utils',
+    'analyzer-core':'utils',
+    'collector':'utils',
+    'git':'utils',
+    'inputs':'utils',
+    'pr':'utils',
+    'state':'utils',
+    'renderer':'utils',
+    'render-support':'utils',
+    'module':'utils',
+    'config':'config',
+    'content':'data',
+    'test':'test',
+    'fixture':'data',
+    'build-output':'utils'
+};
+
+function architectureRoleToLayer(role){
+    if(!role)return null;
+    return ARCHITECTURE_ROLE_TO_LAYER[role]||null;
+}
+
+function getMonorepoPackagePrefix(path){
+    var p=normalizeArchitecturePath(path);
+    var match=p.match(/^(apps|packages)\/([^/]+)\//i);
+    if(!match)return null;
+    return{
+        root:match[1].toLowerCase(),
+        name:match[2],
+        prefix:match[0],
+        rest:p.slice(match[0].length)
+    };
+}
+
+function isMonorepoApiPackageName(name){
+    return /^(api|server|backend|worker|workers|service|services)(-|$)/i.test(String(name||''));
+}
+
+function looksLikeMonorepoPaths(paths){
+    var hasApps=false;
+    var hasPackages=false;
+    var appNames=Object.create(null);
+    var packageNames=Object.create(null);
+    (paths||[]).forEach(function(p){
+        var app=p.match(/(?:^|\/)apps\/([^/]+)\//i);
+        if(app){hasApps=true;appNames[app[1].toLowerCase()]=true;}
+        var pkg=p.match(/(?:^|\/)packages\/([^/]+)\//i);
+        if(pkg){hasPackages=true;packageNames[pkg[1].toLowerCase()]=true;}
+    });
+    if(hasApps&&hasPackages)return true;
+    if(Object.keys(appNames).length>=2)return true;
+    if(hasPackages&&Object.keys(packageNames).length>=2&&hasApps)return true;
+    return false;
+}
 
 function getArchitectureGroupOrder(profile){
     if(profile==='codeflow')return ARCHITECTURE_GROUP_ORDER_CODEFLOW;
     if(profile==='web-app')return ARCHITECTURE_GROUP_ORDER_WEBAPP;
+    if(profile==='monorepo')return ARCHITECTURE_GROUP_ORDER_MONOREPO;
     return ARCHITECTURE_GROUP_ORDER_GENERIC;
 }
 
 function detectArchitectureProfile(files,framework){
     var paths=(files||[]).map(function(f){return normalizeArchitecturePath(f.path||f.name).toLowerCase();});
     if(paths.some(function(p){return /(^|\/)index\.html?$/i.test(p);})&&paths.some(function(p){return /(^|\/)card\/(lib|render)\//i.test(p);}))return'codeflow';
+    // Stack / monorepo before web-app: apps/* + packages/* also match Next.js path heuristics.
+    if(looksLikeMonorepoPaths(paths))return'monorepo';
     if(framework==='Next.js')return'web-app';
     if(paths.some(function(p){
         return /(^|\/)src\/app\//i.test(p)||/(^|\/)pages\//i.test(p)||/(^|\/)(backend|server|api|services?|middleware|routes?|platforms?)\b/i.test(p);
@@ -3914,12 +3997,15 @@ function isNonRouteFolderSegment(segment){
 
 function isArchitectureBackendPath(path){
     var p=normalizeArchitecturePath(path).toLowerCase();
+    var pkg=getMonorepoPackagePrefix(p);
+    if(pkg&&isMonorepoApiPackageName(pkg.name))return true;
     if(/(^|\/)(a-)?backend(\/|$)/.test(p))return true;
     if(/(^|\/)server(\/|$)/.test(p))return true;
     if(/(^|\/)workers?(\/|$)/.test(p))return true;
     if(/(^|\/)functions(\/|$)/.test(p))return true;
     if(/(^|\/)lambda(\/|$)/.test(p))return true;
     if(/^src\/app\/api\//.test(p))return false;
+    if(/\/src\/app\/api\//.test(p))return false;
     var segments=p.split('/').filter(Boolean);
     for(var i=0;i<segments.length;i++){
         var seg=segments[i];
@@ -3928,6 +4014,8 @@ function isArchitectureBackendPath(path){
             if(i===0)return true;
             var prev=segments[i-1];
             if(prev==='backend'||prev==='a-backend'||prev==='server'||prev==='api')return true;
+            // Monorepo API apps: apps/api/src/routes/...
+            if(prev==='src'&&pkg&&isMonorepoApiPackageName(pkg.name))return true;
         }
     }
     return false;
@@ -4054,6 +4142,7 @@ function inferWebAppArchitectureRole(path,classified,content){
 
 function inferArchitectureRole(path,profile,classified,content){
     if(profile==='codeflow')return inferCodeflowArchitectureRole(path);
+    // Monorepo packages reuse web-app role rules (with package-aware backend detection).
     return inferWebAppArchitectureRole(path,classified||{kind:'utility',route:null},content||'');
 }
 
@@ -4070,6 +4159,21 @@ function inferArchitectureGroup(role,fact,profile){
         if(fact&&fact.kind==='api')return'Application';
         if(fact&&(fact.kind==='database-adapter'||fact.kind==='database'))return'Storage';
         return'Application';
+    }
+    if(profile==='monorepo'){
+        if(role==='test')return'Testing';
+        if(role==='fixture')return'Fixtures / Examples';
+        if(role==='build-output')return'Build Output';
+        if(role==='config')return'Configuration';
+        if(fact&&(fact.kind==='database-adapter'||fact.kind==='database'))return'Data / Storage';
+        var pkg=getMonorepoPackagePrefix(fact&&fact.path||'');
+        if(pkg){
+            if(pkg.root==='packages')return'Shared Packages';
+            if(isMonorepoApiPackageName(pkg.name))return'API / Services';
+            return'Apps';
+        }
+        if(role==='backend-routes'||role==='backend-middleware'||role==='backend-services'||role==='backend-module'||role==='platform-analyzer'||role==='api-client')return'API / Services';
+        return'Apps';
     }
     if(role==='app-shell')return'App Entry / Shell';
     if(role==='frontend-route')return'Frontend Routes / Views';
@@ -4267,6 +4371,8 @@ function nextRouteFromSegments(segments){
 
 function inferArchitectureRoute(path){
     var p=normalizeArchitecturePath(path);
+    var pkg=getMonorepoPackagePrefix(p);
+    if(pkg)p=pkg.rest;
     var match;
 
     match=p.match(/^(?:src\/)?app\/api\/(.+)\/route\.(js|jsx|ts|tsx)$/i);
@@ -4533,12 +4639,37 @@ function shouldShowArchitectureBlock(fact){
 }
 
 function architectureLayer(fact){
+    // Prefer role→canonical layer so diagram blocks and violation scoring share one taxonomy.
+    var canonical=architectureRoleToLayer(fact&&fact.role);
+    if(canonical==='ui'||canonical==='components'||canonical==='presentation'||canonical==='page'||canonical==='view')return'Frontend';
+    if(canonical==='services'||canonical==='api'||canonical==='service')return'Backend';
+    if(canonical==='data'||canonical==='model')return'Data Layer';
+    if(canonical==='config')return'Configuration';
+    if(canonical==='test')return'Testing';
+    if(canonical==='utils'||canonical==='util'||canonical==='lib'||canonical==='helper'||canonical==='core')return'Shared';
     if(fact.kind==='page'||fact.kind==='component'||fact.kind==='hook')return'Frontend';
     if(fact.kind==='api'||fact.kind==='service')return'Backend';
     if(fact.kind==='database-adapter')return'Data Layer';
     if(fact.kind==='database')return'Storage';
     if(fact.kind==='module'||fact.kind==='utility')return'Shared';
     return'Shared';
+}
+
+function stampArchitectureLayersFromFacts(files,facts){
+    var byPath=Object.create(null);
+    (facts||[]).forEach(function(fact){
+        if(fact&&fact.path)byPath[fact.path]=fact;
+    });
+    (files||[]).forEach(function(file){
+        if(!file||!file.path||file.layer==='note')return;
+        var fact=byPath[normalizeArchitecturePath(file.path)];
+        if(!fact)return;
+        var derived=architectureRoleToLayer(fact.role);
+        if(derived){
+            file.layer=derived;
+            file.architectureRole=fact.role;
+        }
+    });
 }
 
 function architectureTitle(fact){
@@ -5285,6 +5416,8 @@ function buildArchitectureDiagram(files){
     var warnings=[];
     var framework=detectArchitectureFramework(files);
     var facts=extractArchitectureFacts(files,framework);
+    // Stamp role-derived layers onto analyzed files so violation scoring uses the same taxonomy.
+    stampArchitectureLayersFromFacts(files,facts);
     var profile=(facts[0]&&facts[0].profile)||detectArchitectureProfile(files,framework);
     var blocks=makeArchitectureBlocks(facts,files,warnings);
     var dependencies=buildArchitectureDependencies(facts,blocks,files);
@@ -5570,7 +5703,6 @@ async function buildAnalysisData(options){
     progress('Analyzing code quality (4/6)...');
     await yieldFn();
     var duplicates=Parser.detectDuplicates(analyzed,allFns);
-    var layerViolations=Parser.detectLayerViolations(analyzed,conns);
     for(var ci=0;ci<analyzed.length;ci+=CALL_BATCH){
         var cEnd=Math.min(ci+CALL_BATCH,analyzed.length);
         for(var cj=ci;cj<cEnd;cj++){
@@ -5581,7 +5713,9 @@ async function buildAnalysisData(options){
 
     progress('Building architecture diagram (5/6)...');
     await yieldFn();
+    // Diagram extraction stamps role→layer onto files; violations run after so both systems agree.
     var architectureDiagram=buildArchitectureDiagram(analyzed);
+    var layerViolations=Parser.detectLayerViolations(analyzed,conns);
 
     progress('Finalizing (6/6)...');
     await yieldFn();

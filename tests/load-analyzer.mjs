@@ -62,6 +62,8 @@ export async function loadAnalyzerContext(expose = {}) {
     'resolveArchitectureBlockIdFromTarget',
     'getArchitectureLayerRulePreset',
     'normalizeArchitectureLayerRule',
+    'architectureRoleToLayer',
+    'detectArchitectureProfile',
     'calcBlast',
     'calcHealth',
     'topFragileFiles',

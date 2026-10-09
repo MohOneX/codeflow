@@ -50,6 +50,13 @@ test('detectLayer classifies root-level layer folders, not just nested ones', ()
   assert.equal(Parser.detectLayer('src/app.js'), 'utils');
 });
 
+test('detectLayer classifies monorepo apps/packages paths', () => {
+  assert.equal(Parser.detectLayer('apps/web/src/app/page.tsx'), 'ui');
+  assert.equal(Parser.detectLayer('apps/web/src/components/HomeCard.tsx'), 'components');
+  assert.equal(Parser.detectLayer('apps/api/src/services/userService.ts'), 'services');
+  assert.equal(Parser.detectLayer('packages/shared/src/format.ts'), 'utils');
+});
+
 test('a test file importing a util or service is NOT flagged as a layer violation', () => {
   const testFiles = [
     { path: 'tests/userService.test.ts', layer: Parser.detectLayer('tests/userService.test.ts') },
